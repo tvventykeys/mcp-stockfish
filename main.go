@@ -169,6 +169,7 @@ func runHTTPServer(
 	mcpServer := server.NewStreamableHTTPServer(s)
 
 	mux := http.NewServeMux()
+	addOAuthDiscovery(mux)
 
 	// Protect all MCP requests with Auth0 verification.
 	mux.Handle(
