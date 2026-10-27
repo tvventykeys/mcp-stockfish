@@ -6,10 +6,15 @@ RUN apk add --no-cache git
 
 WORKDIR /app
 
+
 COPY go.mod go.sum ./
 RUN go mod download
 
 COPY *.go ./
+
+# Ensure Go dependencies and checksums are complete
+RUN go mod tidy
+
 
 ARG VERSION=dev
 
