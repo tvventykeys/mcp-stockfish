@@ -7,7 +7,7 @@ toolchain go1.23.9
 require (
 	github.com/google/uuid v1.6.0
 	github.com/joho/godotenv v1.5.1
-	github.com/mark3labs/mcp-go v0.29.0
+	github.com/mark3labs/mcp-go v0.30.0
 	github.com/rs/zerolog v1.34.0
 )
 
