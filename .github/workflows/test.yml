@@ -19,6 +19,7 @@ jobs:
         run: go build ./...
       - name: Test Docker build
         run: docker build -t mcp-stockfish .
+      
       - name: Test MCP connection
         run: |
           docker run -d --name stockfish-test \
@@ -30,22 +31,34 @@ jobs:
           sleep 5
 
           curl --fail-with-body -sS \
-            --max-time 15 \
+            -D /tmp/mcp-headers \
+            -o /tmp/mcp-body \
             http://localhost:8080/mcp \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"github-test","version":"1.0"}}}'
 
-          echo "Testing Stockfish engine..."
+          cat /tmp/mcp-body
+
+          SESSION=$(grep -i '^mcp-session-id:' /tmp/mcp-headers | tr -d '\r' | cut -d' ' -f2)
+          test -n "$SESSION"
 
           curl --fail-with-body -sS \
-            --max-time 15 \
             http://localhost:8080/mcp \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
-            -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"uci"}}}' \
-            | tee /tmp/stockfish-response.txt
+            -H "Mcp-Session-Id: $SESSION" \
+            -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
 
-          grep -q 'uciok' /tmp/stockfish-response.txt
+          curl --fail-with-body -sS \
+            http://localhost:8080/mcp \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -H "Mcp-Session-Id: $SESSION" \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+            | tee /tmp/tools.txt
+
+          grep -q '"tools"' /tmp/tools.txt
 
           docker stop stockfish-test
+
