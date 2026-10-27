@@ -60,26 +60,59 @@ jobs:
 
           grep -q '"tools"' /tmp/tools.txt
           
-          echo "Setting up starting position"
+          
+          echo "Setting up London System position"
 
           curl --fail-with-body -sS \
             http://localhost:8080/mcp \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Mcp-Session-Id: $SESSION" \
-            -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"position startpos"}}}'
+            -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"position startpos moves d2d4 d7d5 c1f4"}}}' \
+            > /tmp/position.json
 
-          echo "Analyzing to depth 10"
+          ENGINE_SESSION=$(python3 -c '
+          import json
+          data=json.load(open("/tmp/position.json"))
+          result=json.loads(data["result"]["content"][0]["text"])
+          assert result["status"]=="success", result
+          print(result["session_id"])
+          ')
+
+          echo "Stockfish session: $ENGINE_SESSION"
+
+          export ENGINE_SESSION
+
+          python3 -c '
+          import json,os
+          data={"jsonrpc":"2.0","id":4,"method":"tools/call",
+            "params":{"name":"chess_engine","arguments":{
+              "command":"go depth 10",
+              "session_id":os.environ["ENGINE_SESSION"]}}}
+          json.dump(data,open("/tmp/request.json","w"))
+          '
+
+          echo "Analyzing London System position"
 
           curl --fail-with-body -sS \
             http://localhost:8080/mcp \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
             -H "Mcp-Session-Id: $SESSION" \
-            -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"go depth 10"}}}' \
-            | tee /tmp/analysis.txt
+            -d @/tmp/request.json \
+            > /tmp/analysis.json
 
-          grep -q 'bestmove' /tmp/analysis.txt
+          python3 -c '
+          import json,os,re
+          data=json.load(open("/tmp/analysis.json"))
+          result=json.loads(data["result"]["content"][0]["text"])
+          print(json.dumps(result,indent=2))
+          assert result["status"]=="success",result
+          assert result["session_id"]==os.environ["ENGINE_SESSION"],"Session changed!"
+          assert any(re.search(r"\bbestmove [a-h][1-8][a-h][1-8]",x) for x in result["response"]),"No best move"
+          print("SUCCESS: Same session and Stockfish best move!")
+          '
+
 
           docker stop stockfish-test
 
