@@ -60,7 +60,7 @@ func (h *StockfishHandler) handle(
 		return mcp.NewToolResultError(fmt.Sprintf("Invalid command: %s", err.Error())), nil
 	}
 
-	actualSessionID, responses, execErr := h.executor.Execute(command, sessionID, 0)
+	actualSessionID, responses, execErr := h.executor.Execute(command, sessionID, 30*time.Second)
 
 	result := CommandResult{
 		SessionID: actualSessionID,
