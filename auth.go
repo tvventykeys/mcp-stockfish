@@ -159,7 +159,8 @@ func verifyStockfishToken(ctx context.Context, token string) error {
 	var selected *authKey
 	for i := range keys.Keys {
 		k := &keys.Keys[i]
-		if k.Kid == header.KeyID && k.Kty == "RSA" &&
+		if k.Kid == header.KeyID &&
+			k.Kty == "RSA" &&
 			(k.Use == "" || k.Use == "sig") &&
 			(k.Alg == "" || k.Alg == "RS256") {
 			selected = k
@@ -180,7 +181,8 @@ func verifyStockfishToken(ctx context.Context, token string) error {
 	}
 
 	exponent := new(big.Int).SetBytes(exponentBytes)
-	if !exponent.IsInt64() || exponent.Sign() <= 0 ||
+	if !exponent.IsInt64() ||
+		exponent.Sign() <= 0 ||
 		exponent.Int64() > 2147483647 {
 		return errors.New("invalid signing key exponent value")
 	}
@@ -212,20 +214,39 @@ func verifyStockfishToken(ctx context.Context, token string) error {
 
 func stockfishAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+
+		// Advertise the OAuth discovery endpoint.
+		w.Header().Set(
+			"WWW-Authenticate",
+			`Bearer resource_metadata="`+
+				oauthMetadataURL()+
+				`", scope="analyze:chess"`,
+		)
+
 		authorization := r.Header.Get("Authorization")
 		fields := strings.Fields(authorization)
 
 		if len(fields) != 2 ||
 			!strings.EqualFold(fields[0], "Bearer") {
-			http.Error(w, "Authentication required", http.StatusUnauthorized)
+			http.Error(
+				w,
+				"Authentication required",
+				http.StatusUnauthorized,
+			)
 			return
 		}
 
 		if err := verifyStockfishToken(r.Context(), fields[1]); err != nil {
-			http.Error(w, "Access denied", http.StatusUnauthorized)
+			http.Error(
+				w,
+				"Access denied",
+				http.StatusUnauthorized,
+			)
 			return
 		}
 
+		// Remove the authentication challenge on success.
+		w.Header().Del("WWW-Authenticate")
 		next.ServeHTTP(w, r)
 	})
 }
