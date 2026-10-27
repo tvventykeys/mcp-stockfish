@@ -5,8 +5,9 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"sync"
-	"time"
+    "strings"
+    "sync"
+    "time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -242,6 +243,13 @@ func (s *StockfishSession) executeCommand(command string, timeout time.Duration)
 	}
 	if err := s.stdin.Flush(); err != nil {
 		return nil, fmt.Errorf("failed to flush command: %w", err)
+	}
+
+	// Position and option commands do not produce
+	// immediate UCI responses.
+	if strings.HasPrefix(command, "position ") ||
+		strings.HasPrefix(command, "setoption ") {
+		return []string{}, nil
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
