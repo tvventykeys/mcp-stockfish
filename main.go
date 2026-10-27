@@ -70,71 +70,65 @@ func run() error {
 Advanced chess analysis using Stockfish engine via UCI (Universal Chess Interface).
 Analyzes positions, finds best moves, evaluates positions. Returns structured results.
 
-MOVE NOTATION: Use algebraic notation (e2e4, g1f3, e1g1 for castling, e7e8q for promotion)
+MOVE NOTATION: Use coordinate notation (e2e4, g1f3, e1g1 for castling, e7e8q for promotion)
 EVALUATION: Centipawns (100 = 1 pawn), positive = White advantage, negative = Black advantage
 
-═══ UCI COMMAND REFERENCE ═══
-
 ENGINE CONTROL:
-┌─ uci           → Initialize engine, get info & options
-├─ isready       → Check if engine ready for commands
-├─ quit          → Shutdown engine
-└─ stop          → Stop current analysis immediately
+uci
+isready
+quit
+stop
 
 POSITION SETUP:
-┌─ position startpos                    → Initial chess position
-├─ position startpos moves e2e4 e7e5    → Initial + move sequence
-├─ position fen [FEN]                   → Custom position from FEN
-└─ position fen [FEN] moves [MOVES]     → Custom FEN + additional moves
+position startpos
+position startpos moves e2e4 e7e5
+position fen [FEN]
+position fen [FEN] moves [MOVES]
 
 ANALYSIS COMMANDS:
-┌─ go depth [N]       → Analyze N plies deep (typical: 15-25)
-├─ go movetime [MS]   → Analyze for N milliseconds (typical: 3000-10000)
-├─ go infinite       → Analyze until stopped (use 'stop' to end)
-├─ go wtime [MS] btime [MS]  → Analysis with time controls
-└─ go nodes [N]      → Analyze exactly N nodes
+go depth [N]
+go movetime [MS]
+go infinite
+go wtime [MS] btime [MS]
+go nodes [N]
 
-ENGINE OPTIONS (setoption name [NAME] value [VALUE]):
-┌─ Hash [1-32768]         → Memory in MB (default: 16)
-├─ Threads [1-128]        → CPU threads (default: 1)
-├─ MultiPV [1-500]        → Show N best lines (default: 1)
-├─ Skill Level [0-20]     → Engine strength (20=strongest)
-├─ Move Overhead [0-5000] → Time buffer in ms
-├─ Slow Mover [10-1000] → Time usage factor
-└─ Contempt [-100-100] → Draw tendency
+ENGINE OPTIONS:
+setoption name Hash value 128
+setoption name Threads value 1
+setoption name MultiPV value 3
 
-TYPICAL WORKFLOWS:
-1. Quick analysis:    "position startpos moves e2e4" → "go movetime 3000"
-2. Deep analysis:     "position startpos" → "go depth 25"
-3. Custom position:   "position fen r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq -" → "go depth 20"
-4. Multi-line:        "setoption name MultiPV value 3" → "position startpos" → "go depth 18"
-5. Weaker play:       "setoption name Skill Level value 10" → "position startpos" → "go depth 15"
+IMPORTANT SESSION MANAGEMENT:
+The first command creates a Stockfish engine session.
+The response includes a session_id.
+Pass that same session_id in subsequent calls to preserve
+the board position and engine settings.
 
-EXAMPLES:
-• "uci" → Get engine info
-• "position startpos moves e2e4 e7e5 g1f3 b8c6" → Set position
-• "go depth 18" → Deep analysis
-• "setoption name Hash value 512" → Increase memory
-• "setoption name MultiPV value 5" → Show top 5 moves
+EXAMPLE:
+1. command: position startpos moves d2d4 d7d5
+2. Save the returned session_id
+3. command: go depth 20, with the same session_id
 		`),
 		mcp.WithString(
 			"command",
 			mcp.Required(),
 			mcp.Description(`
-Exact UCI command to execute. Use commands from the reference above.
+Exact UCI command to execute.
 
-QUICK REFERENCE:
-• uci, isready, quit, stop
-• position startpos [moves MOVE_LIST]
-• position fen FEN_STRING [moves MOVE_LIST]
-• go depth N | go movetime MS | go infinite
-• setoption name OPTION_NAME value VALUE
-
-MOVE FORMAT: e2e4 e7e5 g1f3 (algebraic notation)
-EXAMPLES: "position startpos moves e2e4", "go depth 15", "setoption name Hash value 256"
+Examples:
+position startpos moves d2d4 d7d5
+position fen rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1
+go depth 20
+setoption name MultiPV value 3
 			`),
 		),
+		mcp.WithString(
+			"session_id",
+			mcp.Description(
+				"Optional Stockfish engine session ID returned by a previous command. Reuse it to preserve the position and engine options.",
+			),
+		),
 	)
+
 	s.AddTool(stockfishTool, stockfishHandler.handle)
 
 	switch ServerMode(cfg.Server.Mode) {
@@ -153,13 +147,14 @@ func runHTTPServer(s *server.MCPServer, cfg *Config, log zerolog.Logger) error {
 	log.Info().
 		Str("address", addr).
 		Msg("Starting Stockfish MCP HTTP server")
-	httpServer := server.NewStreamableHTTPServer(s)
 
+	httpServer := server.NewStreamableHTTPServer(s)
 	return httpServer.Start(addr)
 }
 
 func runStdioServer(s *server.MCPServer, log zerolog.Logger) error {
 	log.Info().Msg("MCP Stockfish server initialized, serving on stdio")
+
 	err := server.ServeStdio(s)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, os.ErrClosed) {
@@ -168,6 +163,7 @@ func runStdioServer(s *server.MCPServer, log zerolog.Logger) error {
 		}
 		return fmt.Errorf("stdio server error: %w", err)
 	}
+
 	log.Info().Msg("Stdio server finished.")
 	return nil
 }
