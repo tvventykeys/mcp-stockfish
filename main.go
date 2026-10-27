@@ -144,42 +144,19 @@ EXAMPLES: "position startpos moves e2e4", "go depth 15", "setoption name Hash va
 	}
 }
 
+
 func runHTTPServer(s *server.MCPServer, cfg *Config, log zerolog.Logger) error {
-	// TODO: waiting for https://github.com/mark3labs/mcp-go/pull/331
-	return nil
-	//ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	//defer stop()
+    addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
-	//addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-	//log.Info().
-	//	Str("address", addr).
-	//	Bool("cors_enabled", cfg.Server.CORS).
-	//	Msg("MCP Stockfish HTTP server starting")
+    log.Info().
+        Str("address", addr).
+        Msg("Starting Stockfish MCP HTTP server")
 
-	//httpServer := server.NewStreamableHTTPServer(s)
-	//errCh := make(chan error, 1)
-	//go func() {
-	//	errCh <- httpServer.Start(addr)
-	//}()
+    httpServer := server.NewStreamableHTTPServer(s)
 
-	//select {
-	//case <-ctx.Done():
-	//	log.Info().Msg("Shutdown signal received, stopping HTTP server...")
-	//	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	//	defer cancel()
-	//	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-	//		log.Error().Err(err).Msg("HTTP server shutdown error")
-	//		return err
-	//	}
-	//	log.Info().Msg("HTTP server stopped gracefully.")
-	//	return context.Canceled
-	//case err := <-errCh:
-	//	if err != nil {
-	//		return fmt.Errorf("HTTP server error: %w", err)
-	//	}
-	//	return nil
-	//}
+    return httpServer.Start(addr)
 }
+
 
 func runStdioServer(s *server.MCPServer, log zerolog.Logger) error {
 	log.Info().Msg("MCP Stockfish server initialized, serving on stdio")
