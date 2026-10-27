@@ -3,10 +3,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -48,13 +50,10 @@ func run() error {
 		Str("version", cfg.Server.Version).
 		Str("stockfish_path", cfg.Stockfish.Path).
 		Int("max_sessions", cfg.Stockfish.MaxSessions).
-		Dur("session_timeout", cfg.Stockfish.SessionTimeout).
 		Str("server_mode", cfg.Server.Mode).
-		Str("http_host", cfg.Server.Host).
-		Int("http_port", cfg.Server.Port).
 		Msg("Configuration loaded")
 
-	// Preserve Stockfish processes between commands.
+	// Preserve Stockfish positions between commands.
 	sessionManager := newSessionManager(cfg.Stockfish, log)
 	defer sessionManager.Close()
 
@@ -71,25 +70,14 @@ func run() error {
 	stockfishTool := mcp.NewTool(
 		"chess_engine",
 		mcp.WithDescription(`
-Advanced chess analysis using the Stockfish engine.
+Analyze chess positions using the Stockfish UCI engine.
 
-MOVE FORMAT:
-Use UCI coordinate notation such as e2e4, g1f3, e1g1.
-
-EVALUATION:
-Centipawns (100 = 1 pawn).
-Positive scores favor White.
-Negative scores favor Black.
-
-ENGINE COMMANDS:
-uci
-isready
-stop
-quit
+UCI MOVE FORMAT:
+e2e4, g1f3, e1g1, e7e8q
 
 POSITION COMMANDS:
 position startpos
-position startpos moves e2e4 e7e5
+position startpos moves d2d4 d7d5 c1f4
 position fen [FEN]
 
 ANALYSIS COMMANDS:
@@ -102,27 +90,33 @@ setoption name Hash value 128
 setoption name Threads value 1
 setoption name MultiPV value 3
 
-PERSISTENT SESSIONS:
-A command returns an engine session_id.
-Reuse that exact session_id for subsequent commands
-to preserve the board position and engine settings.
+SESSION MANAGEMENT:
+The first command creates an engine session.
+Save the returned session_id.
+Reuse that same session_id on subsequent calls
+to preserve the position and engine options.
 
-EXAMPLE:
-1. command: position startpos moves d2d4 d7d5 c1f4
+Example:
+1. position startpos moves d2d4 d7d5 c1f4
 2. Save the returned session_id.
-3. command: go depth 20, using that session_id.
+3. go depth 20 using that session_id.
+
+EVALUATION:
+100 centipawns = 1 pawn.
+Positive evaluations favor White.
+Negative evaluations favor Black.
 		`),
 		mcp.WithString(
 			"command",
 			mcp.Required(),
 			mcp.Description(
-				"UCI command, such as position startpos moves d2d4 d7d5, or go depth 20.",
+				"UCI command, such as position startpos moves d2d4 d7d5 or go depth 20.",
 			),
 		),
 		mcp.WithString(
 			"session_id",
 			mcp.Description(
-				"Optional engine session ID from a previous command. Reuse it to preserve the chess position.",
+				"Optional engine session ID from a previous command. Reuse to preserve the chess position.",
 			),
 		),
 	)
@@ -153,48 +147,79 @@ func runHTTPServer(
 		cfg.Server.Port,
 	)
 
-	// Refuse to start without an API audience.
-	// This prevents accidentally exposing the server
-	// with incomplete authentication configuration.
-	if os.Getenv("AUTH0_AUDIENCE") == "" {
+	audience := os.Getenv("AUTH0_AUDIENCE")
+	if audience == "" {
 		return errors.New(
 			"AUTH0_AUDIENCE must be configured for HTTP mode",
 		)
 	}
 
-	log.Info().
-		Str("address", addr).
-		Msg("Starting authenticated Stockfish MCP server")
-
 	mcpServer := server.NewStreamableHTTPServer(s)
-
 	mux := http.NewServeMux()
-	addOAuthDiscovery(mux)
 
-	// Protect all MCP requests with Auth0 verification.
+	// Protect all MCP traffic with Auth0.
 	mux.Handle(
 		"/mcp",
 		stockfishAuthMiddleware(mcpServer),
 	)
 
-	// Public health endpoint for Render.
-	// Does not expose chess tools.
-	mux.HandleFunc(
-		"/health",
-		func(w http.ResponseWriter, r *http.Request) {
-			if r.Method != http.MethodGet {
-				w.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
+	// Public OAuth protected-resource discovery.
+	// This is metadata only, not a chess endpoint.
+	metadataHandler := func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
 
-			w.Header().Set(
-				"Content-Type",
-				"text/plain; charset=utf-8",
-			)
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
-		},
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+
+		metadata := map[string]interface{}{
+			"resource": audience,
+			"authorization_servers": []string{
+				strings.TrimRight(auth0Issuer, "/"),
+			},
+			"scopes_supported": []string{
+				"analyze:chess",
+			},
+			"bearer_methods_supported": []string{
+				"header",
+			},
+		}
+
+		if err := json.NewEncoder(w).Encode(metadata); err != nil {
+			log.Error().Err(err).Msg("OAuth metadata encoding failed")
+		}
+	}
+
+	mux.HandleFunc(
+		"/.well-known/oauth-protected-resource",
+		metadataHandler,
 	)
+
+	mux.HandleFunc(
+		"/.well-known/oauth-protected-resource/mcp",
+		metadataHandler,
+	)
+
+	// Public health check for Render.
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+
+		w.Header().Set(
+			"Content-Type",
+			"text/plain; charset=utf-8",
+		)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	log.Info().
+		Str("address", addr).
+		Msg("Starting authenticated Stockfish MCP server")
 
 	httpServer := &http.Server{
 		Addr:              addr,
@@ -209,8 +234,9 @@ func runStdioServer(
 	s *server.MCPServer,
 	log zerolog.Logger,
 ) error {
-	log.Info().
-		Msg("MCP Stockfish server initialized, serving on stdio")
+	log.Info().Msg(
+		"MCP Stockfish server initialized, serving on stdio",
+	)
 
 	err := server.ServeStdio(s)
 	if err != nil {
@@ -221,7 +247,6 @@ func runStdioServer(
 				Msg("Stdio server connection closed")
 			return context.Canceled
 		}
-
 		return fmt.Errorf("stdio server error: %w", err)
 	}
 
