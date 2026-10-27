@@ -1,3 +1,4 @@
+
 package main
 
 import (
@@ -39,7 +40,6 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize logger: %w", err)
 	}
-
 	log.Info().
 		Str("server_name", cfg.Server.Name).
 		Str("version", cfg.Server.Version).
@@ -51,9 +51,12 @@ func run() error {
 		Int("http_port", cfg.Server.Port).
 		Msg("Configuration loaded")
 
-	var executor commandExecutor
-	executor = NewEphemeralSessionExecutor(cfg.Stockfish.Path, cfg.Stockfish.CommandTimeout, log)
+	// Keep Stockfish processes alive between commands.
+	sessionManager := newSessionManager(cfg.Stockfish, log)
+	defer sessionManager.Close()
 
+	var executor commandExecutor
+	executor = NewPersistentSessionExecutor(sessionManager, log)
 	stockfishHandler := newStockfishHandler(executor, log)
 
 	s := server.NewMCPServer(
@@ -74,7 +77,7 @@ EVALUATION: Centipawns (100 = 1 pawn), positive = White advantage, negative = Bl
 
 ENGINE CONTROL:
 ┌─ uci           → Initialize engine, get info & options
-├─ isready       → Check if engine ready for commands  
+├─ isready       → Check if engine ready for commands
 ├─ quit          → Shutdown engine
 └─ stop          → Stop current analysis immediately
 
@@ -93,23 +96,23 @@ ANALYSIS COMMANDS:
 
 ENGINE OPTIONS (setoption name [NAME] value [VALUE]):
 ┌─ Hash [1-32768]         → Memory in MB (default: 16)
-├─ Threads [1-128]        → CPU threads (default: 1)  
+├─ Threads [1-128]        → CPU threads (default: 1)
 ├─ MultiPV [1-500]        → Show N best lines (default: 1)
 ├─ Skill Level [0-20]     → Engine strength (20=strongest)
 ├─ Move Overhead [0-5000] → Time buffer in ms
-├─ Slow Mover [10-1000]   → Time usage factor
-└─ Contempt [-100-100]    → Draw tendency
+├─ Slow Mover [10-1000] → Time usage factor
+└─ Contempt [-100-100] → Draw tendency
 
 TYPICAL WORKFLOWS:
 1. Quick analysis:    "position startpos moves e2e4" → "go movetime 3000"
-2. Deep analysis:     "position startpos" → "go depth 25" 
+2. Deep analysis:     "position startpos" → "go depth 25"
 3. Custom position:   "position fen r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq -" → "go depth 20"
 4. Multi-line:        "setoption name MultiPV value 3" → "position startpos" → "go depth 18"
 5. Weaker play:       "setoption name Skill Level value 10" → "position startpos" → "go depth 15"
 
 EXAMPLES:
 • "uci" → Get engine info
-• "position startpos moves e2e4 e7e5 g1f3 b8c6" → Set position  
+• "position startpos moves e2e4 e7e5 g1f3 b8c6" → Set position
 • "go depth 18" → Deep analysis
 • "setoption name Hash value 512" → Increase memory
 • "setoption name MultiPV value 5" → Show top 5 moves
@@ -122,7 +125,7 @@ Exact UCI command to execute. Use commands from the reference above.
 
 QUICK REFERENCE:
 • uci, isready, quit, stop
-• position startpos [moves MOVE_LIST]  
+• position startpos [moves MOVE_LIST]
 • position fen FEN_STRING [moves MOVE_LIST]
 • go depth N | go movetime MS | go infinite
 • setoption name OPTION_NAME value VALUE
@@ -144,23 +147,19 @@ EXAMPLES: "position startpos moves e2e4", "go depth 15", "setoption name Hash va
 	}
 }
 
-
 func runHTTPServer(s *server.MCPServer, cfg *Config, log zerolog.Logger) error {
-    addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+	addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 
-    log.Info().
-        Str("address", addr).
-        Msg("Starting Stockfish MCP HTTP server")
+	log.Info().
+		Str("address", addr).
+		Msg("Starting Stockfish MCP HTTP server")
+	httpServer := server.NewStreamableHTTPServer(s)
 
-    httpServer := server.NewStreamableHTTPServer(s)
-
-    return httpServer.Start(addr)
+	return httpServer.Start(addr)
 }
-
 
 func runStdioServer(s *server.MCPServer, log zerolog.Logger) error {
 	log.Info().Msg("MCP Stockfish server initialized, serving on stdio")
-
 	err := server.ServeStdio(s)
 	if err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, os.ErrClosed) {
