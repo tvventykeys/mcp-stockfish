@@ -17,3 +17,5 @@ jobs:
         run: go mod tidy
       - name: Build
         run: go build ./...
+      - name: Test Docker build
+        run: docker build -t mcp-stockfish .
