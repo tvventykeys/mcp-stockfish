@@ -1,0 +1,54 @@
+
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+)
+
+func oauthMetadataURL() string {
+	return os.Getenv("MCP_PUBLIC_URL") +
+		"/.well-known/oauth-protected-resource"
+}
+
+func addOAuthDiscovery(mux *http.ServeMux) {
+	mux.HandleFunc(
+		"/.well-known/oauth-protected-resource",
+		func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet {
+				http.Error(w, "Method not allowed", 405)
+				return
+			}
+
+			resource := os.Getenv("AUTH0_AUDIENCE")
+			if resource == "" {
+				http.Error(w, "Not configured", 503)
+				return
+			}
+
+			w.Header().Set(
+				"Content-Type", "application/json",
+			)
+			w.Header().Set(
+				"Cache-Control", "no-store",
+			)
+			w.Header().Set(
+				"Access-Control-Allow-Origin", "*",
+			)
+
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"resource": resource,
+				"authorization_servers": []string{
+					"https://dev-izfq8xjvdj2uhm4t.us.auth0.com/",
+				},
+				"scopes_supported": []string{
+					"analyze:chess",
+				},
+				"bearer_methods_supported": []string{
+					"header",
+				},
+			})
+		},
+	)
+}
