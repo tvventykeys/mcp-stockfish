@@ -59,6 +59,27 @@ jobs:
             | tee /tmp/tools.txt
 
           grep -q '"tools"' /tmp/tools.txt
+          
+          echo "Setting up starting position"
+
+          curl --fail-with-body -sS \
+            http://localhost:8080/mcp \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -H "Mcp-Session-Id: $SESSION" \
+            -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"position startpos"}}}'
+
+          echo "Analyzing to depth 10"
+
+          curl --fail-with-body -sS \
+            http://localhost:8080/mcp \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -H "Mcp-Session-Id: $SESSION" \
+            -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"go depth 10"}}}' \
+            | tee /tmp/analysis.txt
+
+          grep -q 'bestmove' /tmp/analysis.txt
 
           docker stop stockfish-test
 
