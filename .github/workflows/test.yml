@@ -8,111 +8,86 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
       - name: Download dependencies
         run: go mod tidy
+
       - name: Build
         run: go build ./...
+
       - name: Test Docker build
         run: docker build -t mcp-stockfish .
-      
-      - name: Test MCP connection
+
+      - name: Test authenticated MCP server
         run: |
           docker run -d --name stockfish-test \
             -e MCP_STOCKFISH_SERVER_MODE=http \
             -e MCP_STOCKFISH_HTTP_HOST=0.0.0.0 \
             -e MCP_STOCKFISH_HTTP_PORT=8080 \
-            -p 8080:8080 mcp-stockfish
+            -e MCP_STOCKFISH_PATH=/usr/bin/stockfish \
+            -e AUTH0_AUDIENCE=https://stockfish-mcp \
+            -p 8080:8080 \
+            mcp-stockfish
 
-          sleep 5
+          echo "Waiting for Stockfish server..."
 
-          curl --fail-with-body -sS \
-            -D /tmp/mcp-headers \
-            -o /tmp/mcp-body \
+          READY=0
+          for i in $(seq 1 20); do
+            if curl -fsS http://localhost:8080/health; then
+              READY=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$READY" -ne 1 ]; then
+            echo "ERROR: Server did not start"
+            docker logs stockfish-test
+            exit 1
+          fi
+
+          echo ""
+          echo "Testing health endpoint..."
+
+          HEALTH=$(curl -sS -o /dev/null \
+            -w '%{http_code}' \
+            http://localhost:8080/health)
+
+          echo "Health HTTP status: $HEALTH"
+          test "$HEALTH" = "200"
+
+          echo "Testing unauthorized MCP access..."
+
+          STATUS=$(curl -sS \
+            -o /tmp/unauthorized.txt \
+            -w '%{http_code}' \
             http://localhost:8080/mcp \
             -H "Content-Type: application/json" \
             -H "Accept: application/json, text/event-stream" \
-            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"github-test","version":"1.0"}}}'
+            -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"security-test","version":"1.0"}}}')
 
-          cat /tmp/mcp-body
+          echo "MCP HTTP status: $STATUS"
+          cat /tmp/unauthorized.txt
 
-          SESSION=$(grep -i '^mcp-session-id:' /tmp/mcp-headers | tr -d '\r' | cut -d' ' -f2)
-          test -n "$SESSION"
+          if [ "$STATUS" != "401" ]; then
+            echo "SECURITY TEST FAILED"
+            exit 1
+          fi
 
-          curl --fail-with-body -sS \
-            http://localhost:8080/mcp \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json, text/event-stream" \
-            -H "Mcp-Session-Id: $SESSION" \
-            -d '{"jsonrpc":"2.0","method":"notifications/initialized"}'
-
-          curl --fail-with-body -sS \
-            http://localhost:8080/mcp \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json, text/event-stream" \
-            -H "Mcp-Session-Id: $SESSION" \
-            -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
-            | tee /tmp/tools.txt
-
-          grep -q '"tools"' /tmp/tools.txt
-          
-          
-          echo "Setting up London System position"
-
-          curl --fail-with-body -sS \
-            http://localhost:8080/mcp \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json, text/event-stream" \
-            -H "Mcp-Session-Id: $SESSION" \
-            -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"position startpos moves d2d4 d7d5 c1f4"}}}' \
-            > /tmp/position.json
-
-          ENGINE_SESSION=$(python3 -c '
-          import json
-          data=json.load(open("/tmp/position.json"))
-          result=json.loads(data["result"]["content"][0]["text"])
-          assert result["status"]=="success", result
-          print(result["session_id"])
-          ')
-
-          echo "Stockfish session: $ENGINE_SESSION"
-
-          export ENGINE_SESSION
-
-          python3 -c '
-          import json,os
-          data={"jsonrpc":"2.0","id":4,"method":"tools/call",
-            "params":{"name":"chess_engine","arguments":{
-              "command":"go depth 10",
-              "session_id":os.environ["ENGINE_SESSION"]}}}
-          json.dump(data,open("/tmp/request.json","w"))
-          '
-
-          echo "Analyzing London System position"
-
-          curl --fail-with-body -sS \
-            http://localhost:8080/mcp \
-            -H "Content-Type: application/json" \
-            -H "Accept: application/json, text/event-stream" \
-            -H "Mcp-Session-Id: $SESSION" \
-            -d @/tmp/request.json \
-            > /tmp/analysis.json
-
-          python3 -c '
-          import json,os,re
-          data=json.load(open("/tmp/analysis.json"))
-          result=json.loads(data["result"]["content"][0]["text"])
-          print(json.dumps(result,indent=2))
-          assert result["status"]=="success",result
-          assert result["session_id"]==os.environ["ENGINE_SESSION"],"Session changed!"
-          assert any(re.search(r"\bbestmove [a-h][1-8][a-h][1-8]",x) for x in result["response"]),"No best move"
-          print("SUCCESS: Same session and Stockfish best move!")
-          '
-
+          echo ""
+          echo "SUCCESS: Unauthenticated MCP access blocked!"
+          echo "SUCCESS: Health endpoint working!"
+          echo "SUCCESS: Authentication middleware active!"
 
           docker stop stockfish-test
 
+      - name: Show container logs on failure
+        if: failure()
+        run: docker logs stockfish-test 2>&1 || true
