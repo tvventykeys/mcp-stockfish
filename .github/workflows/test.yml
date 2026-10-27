@@ -36,4 +36,16 @@ jobs:
             -H "Accept: application/json, text/event-stream" \
             -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"github-test","version":"1.0"}}}'
 
+          echo "Testing Stockfish engine..."
+
+          curl --fail-with-body -sS \
+            --max-time 15 \
+            http://localhost:8080/mcp \
+            -H "Content-Type: application/json" \
+            -H "Accept: application/json, text/event-stream" \
+            -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"chess_engine","arguments":{"command":"uci"}}}' \
+            | tee /tmp/stockfish-response.txt
+
+          grep -q 'uciok' /tmp/stockfish-response.txt
+
           docker stop stockfish-test
